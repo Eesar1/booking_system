@@ -1,87 +1,55 @@
-﻿import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFormik } from "formik";
 import * as Yup from "yup";
 import {
+  AlertCircle,
   Calendar,
   CalendarCheck,
   CalendarDays,
   Check,
   ChevronRight,
   Clock,
-  Clock3,
-  FileText,
   Heart,
   Mail,
   MapPin,
   Phone,
-  Scissors,
   Shield,
   Sparkles,
   Star,
   Stethoscope,
   TrendingUp,
-  Briefcase,
-  User
+  User,
+  XCircle
 } from "lucide-react";
 import "./App.css";
 
-const SERVICES = [
-  {
-    id: "general",
-    name: "General Consultation",
-    duration: 30,
-    price: 30,
-    note: "Available today",
-    tag: "Popular",
-    icon: Stethoscope,
-    color: "linear-gradient(135deg, #fb7185, #fb923c)",
-    description: "Professional consultation with experienced staff"
-  },
-  {
-    id: "skin",
-    name: "Skin Care Session",
-    duration: 45,
-    price: 45,
-    note: "3 slots left",
-    tag: "New",
-    icon: Sparkles,
-    color: "linear-gradient(135deg, #a78bfa, #7c3aed)",
-    description: "Refreshing skin treatment for glowing results"
-  },
-  {
-    id: "coaching",
-    name: "Business Coaching",
-    duration: 60,
-    price: 60,
-    note: "Weekly schedule",
-    tag: "Pro",
-    icon: Briefcase,
-    color: "linear-gradient(135deg, #34d399, #0ea5a3)",
-    description: "One on one growth and strategy guidance"
-  },
-  {
-    id: "salon",
-    name: "Salon Services",
-    duration: 90,
-    price: 75,
-    note: "Book early",
-    tag: "Trending",
-    icon: Scissors,
-    color: "linear-gradient(135deg, #f472b6, #fb7185)",
-    description: "Premium hair and beauty services"
-  }
-];
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:5000/api";
+const SESSION_TOKEN_KEY = "booking_token";
+const SESSION_USER_KEY = "booking_user";
+const TIME_SLOTS = ["09:00 AM", "10:00 AM", "11:00 AM", "12:00 PM", "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM"];
 
-const TIME_SLOTS = [
-  { time: "09:00 AM", available: true },
-  { time: "10:00 AM", available: true },
-  { time: "11:00 AM", available: false },
-  { time: "12:00 PM", available: true },
-  { time: "02:00 PM", available: true },
-  { time: "03:00 PM", available: true },
-  { time: "04:00 PM", available: false },
-  { time: "05:00 PM", available: true }
-];
+const DETAILS_SCHEMA = Yup.object({
+  fullName: Yup.string().required("Full name is required"),
+  email: Yup.string().email("Enter a valid email").required("Email is required"),
+  phone: Yup.string().matches(/^[+\d\s\-()]{7,}$/u, "Enter a valid phone number").required("Phone is required"),
+  notes: Yup.string()
+});
+
+const SERVICE_META = {
+  "General Consultation": { tag: "Popular", color: "linear-gradient(135deg, #fb7185, #fb923c)" },
+  "Skin Care Session": { tag: "New", color: "linear-gradient(135deg, #a78bfa, #7c3aed)" },
+  "Business Coaching": { tag: "Pro", color: "linear-gradient(135deg, #34d399, #0ea5a3)" },
+  "Salon Services": { tag: "Trending", color: "linear-gradient(135deg, #f472b6, #fb7185)" }
+};
+
+const parseStoredUser = () => {
+  try {
+    const raw = localStorage.getItem(SESSION_USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
 
 const generateCalendarDays = () => {
   const today = new Date();
@@ -93,7 +61,6 @@ const generateCalendarDays = () => {
       date: date.getDate(),
       dayName: date.toLocaleDateString("en-US", { weekday: "short" }),
       month: date.toLocaleDateString("en-US", { month: "short" }),
-      fullDate: date,
       isToday: index === 0
     };
   });
@@ -102,424 +69,344 @@ const generateCalendarDays = () => {
 const formatDisplayDate = (iso) => {
   if (!iso) return "";
   const date = new Date(iso);
-  return date.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric"
-  });
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 };
+
+const parseTimeToMinutes = (value) => {
+  const [timePart, period] = value.split(" ");
+  const [rawHours, rawMinutes] = timePart.split(":").map(Number);
+  let hours = rawHours;
+  if (period === "PM" && hours !== 12) hours += 12;
+  if (period === "AM" && hours === 12) hours = 0;
+  return hours * 60 + rawMinutes;
+};
+
+const minutesToTime = (totalMinutes) => {
+  const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+  const hours24 = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  const period = hours24 >= 12 ? "PM" : "AM";
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  return `${hours12}:${String(minutes).padStart(2, "0")} ${period}`;
+};
+
+const normalizeError = (error, fallback) => (error instanceof Error && error.message ? error.message : fallback);
+
+async function apiRequest(path, { method = "GET", token = "", body } = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
+  if (!response.ok) throw new Error(data.message || "Request failed.");
+  return data;
+}
 
 function App() {
   const calendarDays = useMemo(() => generateCalendarDays(), []);
-  const [selectedServiceId, setSelectedServiceId] = useState(SERVICES[0].id);
+  const [token, setToken] = useState(() => localStorage.getItem(SESSION_TOKEN_KEY) || "");
+  const [currentUser, setCurrentUser] = useState(() => parseStoredUser());
+  const [authMode, setAuthMode] = useState("login");
+  const [authMessage, setAuthMessage] = useState({ type: "", text: "" });
+  const [message, setMessage] = useState({ type: "", text: "" });
+
+  const [services, setServices] = useState([]);
+  const [selectedServiceId, setSelectedServiceId] = useState("");
   const [selectedDate, setSelectedDate] = useState(calendarDays[0]?.id || "");
   const [selectedTime, setSelectedTime] = useState("");
+  const [appointments, setAppointments] = useState([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
   const [showModal, setShowModal] = useState(false);
-  const [currentStep, setCurrentStep] = useState(1);
+  const [lastCreatedAppointment, setLastCreatedAppointment] = useState(null);
   const [highlightAvailability, setHighlightAvailability] = useState(false);
 
   const availabilityRef = useRef(null);
   const highlightTimer = useRef(null);
 
   const formik = useFormik({
-    initialValues: {
-      fullName: "",
-      email: "",
-      phone: "",
-      notes: ""
-    },
-    validationSchema: Yup.object({
-      fullName: Yup.string().required("Full name is required"),
-      email: Yup.string().email("Enter a valid email").required("Email is required"),
-      phone: Yup.string().matches(/^[\+\d\s\-()]*$/, "Enter a valid phone number").required("Phone is required"),
-      notes: Yup.string()
-    }),
-    validateOnMount: false,
-    onSubmit: () => {}
+    initialValues: { fullName: "", email: "", phone: "", notes: "" },
+    validationSchema: DETAILS_SCHEMA,
+    onSubmit: () => { }
   });
 
-  const selectedService = SERVICES.find((service) => service.id === selectedServiceId);
-  const SummaryIcon = selectedService ? selectedService.icon : null;
-  const serviceTax = selectedService ? selectedService.price * 0.1 : 0;
-  const serviceTotal = selectedService ? selectedService.price + serviceTax : 0;
-  const firstAvailableTime = TIME_SLOTS.find((slot) => slot.available)?.time || "--";
+  const authFormik = useFormik({
+    initialValues: { name: "", email: "", password: "", phone: "" },
+    validationSchema: Yup.object({
+      name: authMode === "signup" ? Yup.string().required("Name is required") : Yup.string(),
+      email: Yup.string().email("Enter a valid email").required("Email is required"),
+      password: Yup.string().min(6, "At least 6 characters").required("Password is required"),
+      phone:
+        authMode === "signup"
+          ? Yup.string().matches(/^[+\d\s\-()]{7,}$/u, "Enter a valid phone number").required("Phone is required")
+          : Yup.string()
+    }),
+    enableReinitialize: true,
+    onSubmit: async (values, { setSubmitting }) => {
+      try {
+        setAuthMessage({ type: "", text: "" });
+        const endpoint = authMode === "signup" ? "/auth/signup" : "/auth/login";
+        const payload = authMode === "signup"
+          ? { name: values.name.trim(), email: values.email.trim(), password: values.password, phone: values.phone.trim() }
+          : { email: values.email.trim(), password: values.password };
+        const data = await apiRequest(endpoint, { method: "POST", body: payload });
 
-  const step1Complete = Boolean(selectedServiceId);
-  const step2Complete = Boolean(selectedDate && selectedTime);
-  const step3Complete = Boolean(
-    formik.values.fullName.trim() &&
-      formik.values.email.trim() &&
-      !formik.errors.fullName &&
-      !formik.errors.email
+        setToken(data.token);
+        setCurrentUser(data.user);
+        localStorage.setItem(SESSION_TOKEN_KEY, data.token);
+        localStorage.setItem(SESSION_USER_KEY, JSON.stringify(data.user));
+        formik.setValues((prev) => ({
+          ...prev,
+          fullName: prev.fullName || data.user?.name || "",
+          email: prev.email || data.user?.email || "",
+          phone: prev.phone || data.user?.phone || ""
+        }));
+        setAuthMessage({ type: "success", text: authMode === "signup" ? "Account created." : "Logged in." });
+        authFormik.resetForm({ values: { name: "", email: values.email, password: "", phone: "" } });
+      } catch (error) {
+        setAuthMessage({ type: "error", text: normalizeError(error, "Authentication failed.") });
+      } finally {
+        setSubmitting(false);
+      }
+    }
+  });
+
+  const loadServices = useCallback(async () => {
+    const data = await apiRequest("/services");
+    const mapped = (data.services || []).map((item) => ({
+      id: item._id,
+      name: item.name,
+      duration: item.durationMinutes || 30,
+      price: typeof item.price === "number" ? item.price : 0,
+      description: item.description || "Professional appointment service",
+      ...SERVICE_META[item.name]
+    }));
+    setServices(mapped);
+    if (mapped.length && !selectedServiceId) setSelectedServiceId(mapped[0].id);
+  }, [selectedServiceId]);
+
+  const loadAppointments = useCallback(async () => {
+    if (!token) {
+      setAppointments([]);
+      return;
+    }
+    setAppointmentsLoading(true);
+    try {
+      const data = await apiRequest("/appointments", { token });
+      setAppointments(data.appointments || []);
+    } catch (error) {
+      setMessage({ type: "error", text: normalizeError(error, "Failed to fetch appointments.") });
+    } finally {
+      setAppointmentsLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    loadServices().catch((error) => setMessage({ type: "error", text: normalizeError(error, "Failed to load services.") }));
+  }, [loadServices]);
+
+  useEffect(() => {
+    loadAppointments();
+  }, [loadAppointments]);
+
+  useEffect(
+    () => () => {
+      if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    },
+    []
   );
 
-  const canConfirm = step1Complete && step2Complete && step3Complete;
+  const selectedService = useMemo(() => services.find((item) => item.id === selectedServiceId), [services, selectedServiceId]);
 
-  const steps = [
-    { id: 1, label: "Choose Service", complete: step1Complete },
-    { id: 2, label: "Pick Date and Time", complete: step2Complete },
-    { id: 3, label: "Your Details", complete: step3Complete }
-  ];
+  const bookedTimes = useMemo(() => {
+    const key = selectedDate;
+    const set = new Set();
+    appointments.forEach((appointment) => {
+      if (!appointment.appointmentDate || appointment.status === "cancelled") return;
+      const dayKey = new Date(appointment.appointmentDate).toISOString().split("T")[0];
+      if (dayKey === key) set.add(appointment.startTime);
+    });
+    return set;
+  }, [appointments, selectedDate]);
 
-  const handleDateSelect = (dateId) => {
-    setSelectedDate(dateId);
-    setSelectedTime("");
-  };
+  const slots = useMemo(
+    () => TIME_SLOTS.map((time) => ({ time, available: !bookedTimes.has(time) })),
+    [bookedTimes]
+  );
 
-  const scrollToAvailability = () => {
+  const firstAvailableTime = slots.find((slot) => slot.available)?.time || "--";
+  const detailsValid = useMemo(() => {
+    try {
+      DETAILS_SCHEMA.validateSync(formik.values, { abortEarly: false });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [formik.values]);
+
+  const canConfirm = Boolean(token && selectedService && selectedDate && selectedTime && detailsValid && !submitting);
+
+  const handleAvailabilityRefresh = async () => {
     availabilityRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     setHighlightAvailability(true);
     if (highlightTimer.current) clearTimeout(highlightTimer.current);
-    highlightTimer.current = setTimeout(() => setHighlightAvailability(false), 1400);
+    highlightTimer.current = setTimeout(() => setHighlightAvailability(false), 1200);
+
+    if (!token) {
+      setMessage({ type: "info", text: "Login to load live availability." });
+      return;
+    }
+
+    setCheckingAvailability(true);
+    await loadAppointments();
+    setCheckingAvailability(false);
+    setMessage({ type: "success", text: "Availability refreshed from backend." });
   };
 
   const handleConfirm = async () => {
     const errors = await formik.validateForm();
     if (Object.keys(errors).length) {
-      formik.setTouched({
-        fullName: true,
-        email: true,
-        phone: true,
-        notes: true
-      });
-      setCurrentStep(3);
+      formik.setTouched({ fullName: true, email: true, phone: true, notes: true });
       return;
     }
-    setShowModal(true);
+    if (!canConfirm || !selectedService) return;
+
+    setSubmitting(true);
+    try {
+      const endTime = minutesToTime(parseTimeToMinutes(selectedTime) + selectedService.duration);
+      const payload = { service: selectedService.id, appointmentDate: selectedDate, startTime: selectedTime, endTime, notes: formik.values.notes.trim() };
+      const data = await apiRequest("/appointments", { method: "POST", token, body: payload });
+      setLastCreatedAppointment(data.appointment || null);
+      setShowModal(true);
+      await loadAppointments();
+      setMessage({ type: "success", text: "Appointment created successfully." });
+    } catch (error) {
+      setMessage({ type: "error", text: normalizeError(error, "Failed to create appointment.") });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const resetForm = () => {
-    setSelectedServiceId(SERVICES[0].id);
-    setSelectedDate(calendarDays[0]?.id || "");
-    setSelectedTime("");
-    formik.resetForm();
-    setCurrentStep(1);
-    setShowModal(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+  const handleCancel = async (appointmentId) => {
+    try {
+      await apiRequest(`/appointments/${appointmentId}`, { method: "PATCH", token, body: { status: "cancelled" } });
+      await loadAppointments();
+      setMessage({ type: "success", text: "Appointment cancelled." });
+    } catch (error) {
+      setMessage({ type: "error", text: normalizeError(error, "Failed to cancel appointment.") });
+    }
+  };
+
+  const handleLogout = () => {
+    setToken("");
+    setCurrentUser(null);
+    setAppointments([]);
+    localStorage.removeItem(SESSION_TOKEN_KEY);
+    localStorage.removeItem(SESSION_USER_KEY);
+    setAuthMessage({ type: "info", text: "Logged out." });
   };
 
   return (
     <div className="app">
       <nav className="topbar">
         <div className="topbar__inner">
-          <div className="brand">
-            <span className="brand__icon">
-              <CalendarCheck size={16} />
-            </span>
-            <span className="brand__name">BookEasy</span>
-          </div>
-          <span className="status-pill">
-            <span className="status-dot" />
-            Open Now
-          </span>
+          <div className="brand"><span className="brand__icon"><CalendarCheck size={16} /></span><span className="brand__name">BookEasy</span></div>
+          {token ? <div className="auth-state"><span>{currentUser?.email || "Signed in"}</span><button className="auth-link" type="button" onClick={handleLogout}>Logout</button></div> : <span className="status-pill"><span className="status-dot" />Guest mode</span>}
         </div>
       </nav>
 
       <main className="shell">
         <section className="hero">
           <div className="hero__content">
-            <span className="hero__tag">
-              <Sparkles size={14} />
-              Local Business Appointment
-            </span>
-            <h1>
-              Book your
-              <span className="hero__accent"> perfect time</span>
-            </h1>
-            <p>
-              Experience seamless appointment booking with real time availability.
-              No more waiting, no more hassle.
-            </p>
+            <span className="hero__tag"><Sparkles size={14} />Local Business Appointment</span>
+            <h1>Book your<span className="hero__accent"> perfect time</span></h1>
+            <p>Day 8: frontend is connected with backend auth, services, and appointments APIs.</p>
             <div className="hero__stats">
-              <div className="stat">
-                <span className="stat__icon stat__icon--amber">
-                  <TrendingUp size={18} />
-                </span>
-                <div>
-                  <strong>92%</strong>
-                  <span>Return rate</span>
-                </div>
-              </div>
-              <div className="stat">
-                <span className="stat__icon stat__icon--violet">
-                  <Star size={18} />
-                </span>
-                <div>
-                  <strong>4.9/5</strong>
-                  <span>Client rating</span>
-                </div>
-              </div>
+              <div className="stat"><span className="stat__icon stat__icon--amber"><TrendingUp size={18} /></span><div><strong>92%</strong><span>Return rate</span></div></div>
+              <div className="stat"><span className="stat__icon stat__icon--violet"><Star size={18} /></span><div><strong>4.9/5</strong><span>Client rating</span></div></div>
             </div>
           </div>
-
           <div className="hero__card">
-            <div className="hero__card-header">
-              <span className="pulse-dot" />
-              Next available
-            </div>
-            <div className="hero__card-main">
-              <p className="hero__card-date">{formatDisplayDate(selectedDate)}</p>
-              <p className="hero__card-time">
-                {selectedTime || firstAvailableTime}
-              </p>
-            </div>
-            <button className="primary-btn" type="button" onClick={scrollToAvailability}>
-              Check availability
-              <ChevronRight size={16} />
-            </button>
-            <div className="hero__card-footer">
-              <div>
-                <Shield size={14} /> Secure booking
+            <div className="hero__card-header"><span className="pulse-dot" />Next available</div>
+            <div className="hero__card-main"><p className="hero__card-date">{formatDisplayDate(selectedDate)}</p><p className="hero__card-time">{selectedTime || firstAvailableTime}</p></div>
+            <button className="primary-btn" type="button" onClick={handleAvailabilityRefresh}>{checkingAvailability ? "Refreshing..." : "Check availability"}<ChevronRight size={16} /></button>
+            <div className="hero__card-footer"><div><Shield size={14} /> Secure booking</div><div><Heart size={14} /> Trusted by 10K+</div></div>
+          </div>
+        </section>
+
+        <section className="card">
+          <header className="card__header"><span className="card__icon card__icon--teal"><User size={18} /></span><div><h2>Customer access</h2><p>Login or signup to create appointments</p></div></header>
+          <div className="card__body">
+            <div className="auth-panel">
+              <div className="auth-tabs">
+                <button type="button" className={authMode === "login" ? "active" : ""} onClick={() => setAuthMode("login")}>Login</button>
+                <button type="button" className={authMode === "signup" ? "active" : ""} onClick={() => setAuthMode("signup")}>Signup</button>
               </div>
-              <div>
-                <Heart size={14} /> Trusted by 10K+
-              </div>
+              {token ? <div className="api-message success">Signed in as <strong>{currentUser?.email}</strong></div> : (
+                <form className="auth-form" onSubmit={authFormik.handleSubmit}>
+                  {authMode === "signup" ? <label className="field"><span>Name <span className="field__required">*</span></span><div className={`field__control ${authFormik.touched.name && authFormik.errors.name ? "error" : ""}`}><User size={14} /><input name="name" value={authFormik.values.name} onChange={authFormik.handleChange} onBlur={authFormik.handleBlur} /></div>{authFormik.touched.name && authFormik.errors.name ? <span className="error-text">{authFormik.errors.name}</span> : null}</label> : null}
+                  <label className="field"><span>Email <span className="field__required">*</span></span><div className={`field__control ${authFormik.touched.email && authFormik.errors.email ? "error" : ""}`}><Mail size={14} /><input type="email" name="email" value={authFormik.values.email} onChange={authFormik.handleChange} onBlur={authFormik.handleBlur} /></div>{authFormik.touched.email && authFormik.errors.email ? <span className="error-text">{authFormik.errors.email}</span> : null}</label>
+                  {authMode === "signup" ? <label className="field"><span>Phone <span className="field__required">*</span></span><div className={`field__control ${authFormik.touched.phone && authFormik.errors.phone ? "error" : ""}`}><Phone size={14} /><input name="phone" value={authFormik.values.phone} onChange={authFormik.handleChange} onBlur={authFormik.handleBlur} /></div>{authFormik.touched.phone && authFormik.errors.phone ? <span className="error-text">{authFormik.errors.phone}</span> : null}</label> : null}
+                  <label className="field"><span>Password <span className="field__required">*</span></span><div className={`field__control ${authFormik.touched.password && authFormik.errors.password ? "error" : ""}`}><Shield size={14} /><input type="password" name="password" value={authFormik.values.password} onChange={authFormik.handleChange} onBlur={authFormik.handleBlur} /></div>{authFormik.touched.password && authFormik.errors.password ? <span className="error-text">{authFormik.errors.password}</span> : null}</label>
+                  <button className="primary-btn auth-submit" type="submit">{authFormik.isSubmitting ? "Please wait..." : authMode === "signup" ? "Create account" : "Sign in"}</button>
+                </form>
+              )}
+              {authMessage.text ? <div className={`api-message ${authMessage.type || "info"}`}>{authMessage.type === "error" ? <AlertCircle size={14} /> : <Check size={14} />}<span>{authMessage.text}</span></div> : null}
             </div>
           </div>
         </section>
 
-        <section className="steps">
-          <div className="steps__track">
-            {steps.map((step) => (
-              <button
-                key={step.id}
-                type="button"
-                onClick={() => setCurrentStep(step.id)}
-                className={`step ${
-                  currentStep === step.id ? "active" : step.complete ? "complete" : ""
-                }`}
-              >
-                <span className="step__icon">
-                  {step.complete && currentStep !== step.id ? (
-                    <Check size={14} />
-                  ) : (
-                    step.id
-                  )}
-                </span>
-                <span className="step__label">{step.label}</span>
-              </button>
-            ))}
-          </div>
-        </section>
+        {message.text ? <div className={`api-message api-message--banner ${message.type || "info"}`}>{message.type === "error" ? <AlertCircle size={14} /> : <Check size={14} />}<span>{message.text}</span></div> : null}
 
         <section className="content">
           <div className="content__main">
             <section className="card">
-              <header className="card__header">
-                <span className="card__icon card__icon--orange">
-                  <Sparkles size={18} />
-                </span>
-                <div>
-                  <h2>Select a service</h2>
-                  <p>Choose the service you want to book</p>
-                </div>
-              </header>
+              <header className="card__header"><span className="card__icon card__icon--orange"><Stethoscope size={18} /></span><div><h2>Select a service</h2><p>Loaded from backend</p></div></header>
               <div className="card__body">
                 <div className="service-grid">
-                  {SERVICES.map((service) => {
-                    const Icon = service.icon;
-                    const isSelected = selectedServiceId === service.id;
-                    return (
-                      <button
-                        key={service.id}
-                        type="button"
-                        className={`service-card ${isSelected ? "selected" : ""}`}
-                        onClick={() => {
-                          setSelectedServiceId(service.id);
-                          setCurrentStep(2);
-                        }}
-                      >
-                        <span className="service-card__check">
-                          {isSelected ? <Check size={14} /> : null}
-                        </span>
-                        <span
-                          className="service-card__icon"
-                          style={{ background: service.color }}
-                        >
-                          <Icon size={18} />
-                        </span>
-                        <div className="service-card__info">
-                          <div className="service-card__title">
-                            <h3>{service.name}</h3>
-                            <span className={`tag tag--${service.tag.toLowerCase()}`}>
-                              {service.tag}
-                            </span>
-                          </div>
-                          <p>{service.description}</p>
-                          <div className="service-card__meta">
-                            <span>
-                              <Clock3 size={12} /> {service.duration} min
-                            </span>
-                            <span className="price">${service.price}</span>
-                            <span>{service.note}</span>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
+                  {services.map((service) => (
+                    <button key={service.id} type="button" className={`service-card ${selectedServiceId === service.id ? "selected" : ""}`} onClick={() => setSelectedServiceId(service.id)}>
+                      <span className="service-card__check">{selectedServiceId === service.id ? <Check size={14} /> : null}</span>
+                      <span className="service-card__icon" style={{ background: service.color }}><Stethoscope size={18} /></span>
+                      <div className="service-card__info">
+                        <div className="service-card__title"><h3>{service.name}</h3><span className={`tag tag--${(service.tag || "popular").toLowerCase()}`}>{service.tag || "Service"}</span></div>
+                        <p>{service.description}</p>
+                        <div className="service-card__meta"><span><Clock size={12} /> {service.duration} min</span><span className="price">${service.price}</span></div>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               </div>
             </section>
 
-            <section
-              ref={availabilityRef}
-              className={`card ${highlightAvailability ? "highlight" : ""}`}
-            >
-              <header className="card__header">
-                <span className="card__icon card__icon--violet">
-                  <CalendarDays size={18} />
-                </span>
-                <div>
-                  <h2>Choose date and time</h2>
-                  <p>Select your preferred appointment slot</p>
-                </div>
-              </header>
+            <section ref={availabilityRef} className={`card ${highlightAvailability ? "highlight" : ""}`}>
+              <header className="card__header"><span className="card__icon card__icon--violet"><CalendarDays size={18} /></span><div><h2>Choose date and time</h2><p>Booked slots are disabled</p></div></header>
               <div className="card__body">
-                <div className="section">
-                  <p className="section__label">Select date</p>
-                  <div className="date-strip scrollbar-hide">
-                    {calendarDays.map((day) => {
-                      const isSelected = selectedDate === day.id;
-                      return (
-                        <button
-                          key={day.id}
-                          type="button"
-                          onClick={() => handleDateSelect(day.id)}
-                          className={`date-card ${isSelected ? "selected" : ""}`}
-                        >
-                          <span>{day.dayName}</span>
-                          <strong>{day.date}</strong>
-                          <small>{day.month}</small>
-                          {day.isToday ? <em>Today</em> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
+                <div className="date-strip scrollbar-hide">{calendarDays.map((day) => <button key={day.id} type="button" onClick={() => { setSelectedDate(day.id); setSelectedTime(""); }} className={`date-card ${selectedDate === day.id ? "selected" : ""}`}><span>{day.dayName}</span><strong>{day.date}</strong><small>{day.month}</small>{day.isToday ? <em>Today</em> : null}</button>)}</div>
                 <div className="divider" />
-
-                <div className="section">
-                  <p className="section__label">Select time</p>
-                  <div className="time-grid">
-                    {TIME_SLOTS.map((slot) => {
-                      const isSelected = selectedTime === slot.time;
-                      return (
-                        <button
-                          key={slot.time}
-                          type="button"
-                          disabled={!slot.available}
-                          className={`time-slot ${
-                            slot.available ? "" : "disabled"
-                          } ${isSelected ? "selected" : ""}`}
-                          onClick={() => {
-                            if (!slot.available) return;
-                            setSelectedTime(slot.time);
-                            setCurrentStep(3);
-                          }}
-                        >
-                          <Clock size={14} />
-                          {slot.time}
-                          {!slot.available ? <span className="slot-x">x</span> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="legend">
-                    <span><i className="dot dot--available" /> Available</span>
-                    <span><i className="dot dot--selected" /> Selected</span>
-                    <span><i className="dot dot--booked" /> Booked</span>
-                  </div>
-                </div>
+                <div className="time-grid">{slots.map((slot) => <button key={slot.time} type="button" disabled={!slot.available} className={`time-slot ${slot.available ? "" : "disabled"} ${selectedTime === slot.time ? "selected" : ""}`} onClick={() => slot.available && setSelectedTime(slot.time)}><Clock size={14} />{slot.time}{!slot.available ? <span className="slot-x">x</span> : null}</button>)}</div>
               </div>
             </section>
 
             <section className="card">
-              <header className="card__header">
-                <span className="card__icon card__icon--teal">
-                  <User size={18} />
-                </span>
-                <div>
-                  <h2>Your details</h2>
-                  <p>We will send confirmation to these details</p>
-                </div>
-              </header>
+              <header className="card__header"><span className="card__icon card__icon--teal"><User size={18} /></span><div><h2>Your details</h2><p>Used in booking confirmation</p></div></header>
               <div className="card__body">
                 <form className="form" onSubmit={formik.handleSubmit}>
                   <div className="form__grid">
-                    <label className="field">
-                      <span >
-                        Full name <span className="field__required">*</span>
-                      </span>
-                      <div className={`field__control ${formik.touched.fullName && formik.errors.fullName ? "error" : ""}`}>
-                        <User size={14} />
-                        <input
-                          type="text"
-                          name="fullName"
-                          placeholder="Enter Your Name"
-                          value={formik.values.fullName}
-                          onChange={formik.handleChange}
-                          onBlur={formik.handleBlur}
-                        />
-                      </div>
-                      {formik.touched.fullName && formik.errors.fullName ? (
-                        <span className="error-text">{formik.errors.fullName}</span>
-                      ) : null}
-                    </label>
-
-                    <label className="field">
-                      <span >
-                        Email <span className="field__required">*</span>
-                      </span>
-                      <div className={`field__control ${formik.touched.email && formik.errors.email ? "error" : ""}`}>
-                        <Mail size={14} />
-                        <input
-                          type="email"
-                          name="email"
-                          placeholder="you@example.com"
-                          value={formik.values.email}
-                          onChange={formik.handleChange}
-                          onBlur={formik.handleBlur}
-                        />
-                      </div>
-                      {formik.touched.email && formik.errors.email ? (
-                        <span className="error-text">{formik.errors.email}</span>
-                      ) : null}
-                    </label>
-
-                    <label className="field">
-                      <span >
-                        Phone <span className="field__required">*</span>
-                      </span>
-                      <div className="field__control">
-                        <Phone size={14} />
-                        <input
-                          type="tel"
-                          name="phone"
-                          placeholder="+92 123 4567890"
-                          value={formik.values.phone}
-                          onChange={formik.handleChange}
-                          onBlur={formik.handleBlur}
-                        />
-                      </div>
-                      {formik.touched.phone && formik.errors.phone ? (
-                        <span className="error-text">{formik.errors.phone}</span>
-                      ) : null}
-                    </label>
-
-                    <label className="field field--full">
-                      Notes
-                      <div className="field__control">
-                        <FileText size={14} />
-                        <textarea
-                          name="notes"
-                          placeholder="Any special requests or notes for your appointment"
-                          value={formik.values.notes}
-                          onChange={formik.handleChange}
-                          onBlur={formik.handleBlur}
-                        />
-                      </div>
-                    </label>
+                    <label className="field"><span>Full name <span className="field__required">*</span></span><div className={`field__control ${formik.touched.fullName && formik.errors.fullName ? "error" : ""}`}><User size={14} /><input name="fullName" value={formik.values.fullName} onChange={formik.handleChange} onBlur={formik.handleBlur} /></div>{formik.touched.fullName && formik.errors.fullName ? <span className="error-text">{formik.errors.fullName}</span> : null}</label>
+                    <label className="field"><span>Email <span className="field__required">*</span></span><div className={`field__control ${formik.touched.email && formik.errors.email ? "error" : ""}`}><Mail size={14} /><input type="email" name="email" value={formik.values.email} onChange={formik.handleChange} onBlur={formik.handleBlur} /></div>{formik.touched.email && formik.errors.email ? <span className="error-text">{formik.errors.email}</span> : null}</label>
+                    <label className="field"><span>Phone <span className="field__required">*</span></span><div className={`field__control ${formik.touched.phone && formik.errors.phone ? "error" : ""}`}><Phone size={14} /><input name="phone" value={formik.values.phone} onChange={formik.handleChange} onBlur={formik.handleBlur} /></div>{formik.touched.phone && formik.errors.phone ? <span className="error-text">{formik.errors.phone}</span> : null}</label>
+                    <label className="field field--full"><span>Notes</span><div className="field__control"><Calendar size={14} /><textarea name="notes" value={formik.values.notes} onChange={formik.handleChange} onBlur={formik.handleBlur} /></div></label>
                   </div>
                 </form>
               </div>
@@ -528,139 +415,28 @@ function App() {
 
           <aside className="content__side">
             <div className="summary-card">
-              <div className="summary-card__header">
-                <Calendar size={18} />
-                Booking summary
-              </div>
-              {selectedService ? (
-                <div className="summary-card__body">
-                  <div className="summary-line">
-                    <span
-                      className="summary-icon"
-                      style={{ background: selectedService.color }}
-                    >
-                      {SummaryIcon ? <SummaryIcon size={16} /> : null}
-                    </span>
-                    <div>
-                      <strong>{selectedService.name}</strong>
-                      <p>{selectedService.duration} minutes</p>
-                    </div>
-                  </div>
-                  <div className="summary-line">
-                    <span className="summary-icon summary-icon--violet">
-                      <CalendarDays size={16} />
-                    </span>
-                    <div>
-                      <strong>{formatDisplayDate(selectedDate)}</strong>
-                      <p>{selectedTime || "Select a time"}</p>
-                    </div>
-                  </div>
-                  <div className="summary-divider" />
-                  <div className="summary-row">
-                    <span>Service fee</span>
-                    <span>${selectedService.price.toFixed(2)}</span>
-                  </div>
-                  <div className="summary-row">
-                    <span>Tax</span>
-                    <span>${serviceTax.toFixed(2)}</span>
-                  </div>
-                  <div className="summary-row summary-total">
-                    <span>Total</span>
-                    <span>${serviceTotal.toFixed(2)}</span>
-                  </div>
-                </div>
-              ) : (
-                <p className="summary-empty">Select a service to see details</p>
-              )}
+              <div className="summary-card__header"><Calendar size={18} />Booking summary</div>
+              {selectedService ? <div className="summary-card__body">
+                <div className="summary-line"><span className="summary-icon" style={{ background: selectedService.color }}><Stethoscope size={16} /></span><div><strong>{selectedService.name}</strong><p>{selectedService.duration} minutes</p></div></div>
+                <div className="summary-line"><span className="summary-icon summary-icon--violet"><CalendarDays size={16} /></span><div><strong>{formatDisplayDate(selectedDate)}</strong><p>{selectedTime || "Select a time"}</p></div></div>
+              </div> : <p className="summary-empty">Select a service</p>}
               <div className="summary-card__footer">
-                <button
-                  type="button"
-                  onClick={handleConfirm}
-                  disabled={!canConfirm}
-                  className={`primary-btn ${canConfirm ? "" : "disabled"}`}
-                >
-                  {canConfirm ? (
-                    <>
-                      Confirm booking
-                      <ChevronRight size={16} />
-                    </>
-                  ) : (
-                    "Complete all steps"
-                  )}
-                </button>
-                <div className="summary-meta">
-                  <span><Shield size={14} /> Secure</span>
-                  <span><MapPin size={14} /> Local business</span>
-                </div>
+                <button type="button" onClick={handleConfirm} disabled={!canConfirm} className={`primary-btn ${canConfirm ? "" : "disabled"}`}>{submitting ? "Booking..." : canConfirm ? "Confirm booking" : "Complete all steps"}</button>
+                <div className="summary-meta"><span><Shield size={14} /> Secure</span><span><MapPin size={14} /> Local business</span></div>
               </div>
             </div>
 
-            <div className="trust-grid">
-              <div className="trust-card">
-                <span className="trust-icon trust-icon--green">
-                  <Check size={16} />
-                </span>
-                <p>Instant confirm</p>
-              </div>
-              <div className="trust-card">
-                <span className="trust-icon trust-icon--blue">
-                  <Calendar size={16} />
-                </span>
-                <p>Free reschedule</p>
-              </div>
-              <div className="trust-card">
-                <span className="trust-icon trust-icon--rose">
-                  <Heart size={16} />
-                </span>
-                <p>Satisfaction</p>
-              </div>
+            <div className="history-card">
+              <div className="history-card__header"><CalendarDays size={16} />Appointment history</div>
+              {appointmentsLoading ? <p>Loading history...</p> : null}
+              {!appointmentsLoading && !appointments.length ? <p>No appointments yet.</p> : null}
+              {!appointmentsLoading && appointments.length ? <div className="history-list">{appointments.slice(0, 5).map((item) => <div key={item._id} className="history-item"><div><strong>{item.service?.name || "Service"}</strong><span>{formatDisplayDate(item.appointmentDate)} at {item.startTime}</span><em className={`status status--${item.status}`}>{item.status}</em></div>{item.status !== "cancelled" ? <button className="history-cancel" type="button" onClick={() => handleCancel(item._id)}><XCircle size={14} />Cancel</button> : null}</div>)}</div> : null}
             </div>
           </aside>
         </section>
       </main>
 
-      {showModal ? (
-        <div className="modal">
-          <div className="modal__backdrop" onClick={() => setShowModal(false)} />
-          <div className="modal__content" role="dialog" aria-modal="true">
-            <div className="modal__icon">
-              <Check size={28} />
-            </div>
-            <h3>Booking confirmed</h3>
-            <p>Your appointment has been successfully scheduled.</p>
-            <div className="modal__summary">
-              <div>
-                <strong>{selectedService?.name}</strong>
-                <span>
-                  {selectedService?.duration} min - ${selectedService?.price}
-                </span>
-              </div>
-              <div>
-                <CalendarDays size={16} />
-                <span>{formatDisplayDate(selectedDate)}</span>
-              </div>
-              <div>
-                <Clock size={16} />
-                <span>{selectedTime || firstAvailableTime}</span>
-              </div>
-              {formik.values.notes ? (
-                <div>
-                  <FileText size={16} />
-                  <span>{formik.values.notes}</span>
-                </div>
-              ) : null}
-            </div>
-            <div className="modal__actions">
-              <button type="button" className="ghost-btn" onClick={() => setShowModal(false)}>
-                Edit booking
-              </button>
-              <button type="button" className="primary-btn" onClick={resetForm}>
-                New booking
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {showModal ? <div className="modal"><div className="modal__backdrop" onClick={() => setShowModal(false)} /><div className="modal__content" role="dialog" aria-modal="true"><div className="modal__icon"><Check size={28} /></div><h3>Booking confirmed</h3><p>Your appointment has been successfully scheduled.</p><div className="modal__summary"><div><strong>{lastCreatedAppointment?.service?.name || selectedService?.name}</strong><span>{formatDisplayDate(lastCreatedAppointment?.appointmentDate || selectedDate)} at {lastCreatedAppointment?.startTime || selectedTime || firstAvailableTime}</span></div></div><div className="modal__actions"><button type="button" className="ghost-btn" onClick={() => setShowModal(false)}>Close</button></div></div></div> : null}
     </div>
   );
 }

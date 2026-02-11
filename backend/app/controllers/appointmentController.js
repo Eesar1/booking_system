@@ -15,16 +15,12 @@ const canAccessAppointment = (appointment, user) =>
 
 const createAppointment = async (req, res) => {
   try {
-    const { service, appointmentDate, startTime, endTime, notes, customerId } = req.body;
+    const { service, serviceName, appointmentDate, startTime, endTime, notes, customerId } = req.body;
 
-    if (!service || !appointmentDate || !startTime || !endTime) {
+    if ((!service && !serviceName) || !appointmentDate || !startTime || !endTime) {
       return res.status(400).json({
-        message: "Service, appointmentDate, startTime, and endTime are required."
+        message: "Service or serviceName, appointmentDate, startTime, and endTime are required."
       });
-    }
-
-    if (!isValidObjectId(service)) {
-      return res.status(400).json({ message: "Invalid service id." });
     }
 
     const parsedDate = parseDate(appointmentDate);
@@ -32,7 +28,29 @@ const createAppointment = async (req, res) => {
       return res.status(400).json({ message: "Invalid appointment date." });
     }
 
-    const serviceDoc = await Service.findById(service);
+    let serviceDoc = null;
+    if (service) {
+      if (!isValidObjectId(service)) {
+        return res.status(400).json({ message: "Invalid service id." });
+      }
+      serviceDoc = await Service.findById(service);
+    } else if (serviceName) {
+      serviceDoc = await Service.findOne({
+        name: { $regex: `^${serviceName.trim()}$`, $options: "i" }
+      });
+    }
+
+    // For UI-only Day 8 integration, allow creating missing service by name.
+    if (!serviceDoc && serviceName) {
+      serviceDoc = await Service.create({
+        name: serviceName.trim(),
+        description: "Service created from booking flow",
+        durationMinutes: 30,
+        price: 0,
+        isActive: true
+      });
+    }
+
     if (!serviceDoc) {
       return res.status(404).json({ message: "Service not found." });
     }

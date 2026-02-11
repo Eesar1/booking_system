@@ -10,7 +10,7 @@ const createToken = (userId) => {
   return jwt.sign({ id: userId }, secret, { expiresIn: "7d" });
 };
 
-const signup = async (req, res, roleOverride = "customer") => {
+const signupWithRole = async (req, res, role = "customer") => {
   try {
     const { name, email, password, phone } = req.body;
 
@@ -29,7 +29,7 @@ const signup = async (req, res, roleOverride = "customer") => {
       email,
       phone,
       passwordHash,
-      role: roleOverride
+      role
     });
 
     const token = createToken(user._id);
@@ -40,6 +40,7 @@ const signup = async (req, res, roleOverride = "customer") => {
         id: user._id,
         name: user.name,
         email: user.email,
+        phone: user.phone,
         role: user.role
       }
     });
@@ -47,6 +48,8 @@ const signup = async (req, res, roleOverride = "customer") => {
     return res.status(500).json({ message: "Signup failed." });
   }
 };
+
+const signup = (req, res) => signupWithRole(req, res, "customer");
 
 const login = async (req, res) => {
   try {
@@ -74,6 +77,7 @@ const login = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        phone: user.phone,
         role: user.role
       }
     });
@@ -108,6 +112,7 @@ const loginAdmin = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        phone: user.phone,
         role: user.role
       }
     });
@@ -116,6 +121,6 @@ const loginAdmin = async (req, res) => {
   }
 };
 
-const signupAdmin = (req, res) => signup(req, res, "admin");
+const signupAdmin = (req, res) => signupWithRole(req, res, "admin");
 
 module.exports = { signup, login, signupAdmin, loginAdmin };
