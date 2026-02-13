@@ -470,7 +470,6 @@ function App() {
         {currentUser?.role === "admin" && token ? (
           <AdminDashboard
             token={token}
-            currentUser={currentUser}
             apiRequest={apiRequest}
             onLogout={handleLogout}
           />

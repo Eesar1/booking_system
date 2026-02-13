@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, CalendarDays, Check, Shield, Wrench } from "lucide-react";
+import { AlertCircle, BarChart3, CalendarDays, Check, Shield, Wrench } from "lucide-react";
 
 const APPOINTMENT_STATUS_OPTIONS = [
   "pending",
@@ -29,10 +29,29 @@ const DEFAULT_AVAILABILITY = {
   slots: []
 };
 
-function AdminDashboard({ token, currentUser, apiRequest, onLogout }) {
+const DEFAULT_REPORTS = {
+  totals: {
+    today: 0,
+    month: 0,
+    allTime: 0
+  },
+  statusBreakdown: {
+    pending: 0,
+    approved: 0,
+    rescheduled: 0,
+    cancelled: 0,
+    completed: 0
+  },
+  dailyTrend: [],
+  monthlyTrend: [],
+  servicePerformance: []
+};
+
+function AdminDashboard({ token, apiRequest, onLogout }) {
   const [services, setServices] = useState([]);
   const [appointments, setAppointments] = useState([]);
   const [availability, setAvailability] = useState(DEFAULT_AVAILABILITY);
+  const [reports, setReports] = useState(DEFAULT_REPORTS);
   const [serviceDrafts, setServiceDrafts] = useState({});
   const [statusDrafts, setStatusDrafts] = useState({});
   const [newService, setNewService] = useState({
@@ -58,10 +77,11 @@ function AdminDashboard({ token, currentUser, apiRequest, onLogout }) {
     if (!token) return;
     setLoading(true);
     try {
-      const [servicesData, appointmentsData, availabilityData] = await Promise.all([
+      const [servicesData, appointmentsData, availabilityData, reportsData] = await Promise.all([
         apiRequest("/admin/services", { token }),
         apiRequest("/admin/appointments", { token }),
-        apiRequest("/admin/availability", { token })
+        apiRequest("/admin/availability", { token }),
+        apiRequest("/admin/reports", { token })
       ]);
 
       const mappedServices = (servicesData.services || []).map(mapService);
@@ -78,6 +98,7 @@ function AdminDashboard({ token, currentUser, apiRequest, onLogout }) {
         )
       );
       setAvailability(availabilityData.availability || DEFAULT_AVAILABILITY);
+      setReports(reportsData.reports || DEFAULT_REPORTS);
     } catch (error) {
       setMessage({ type: "error", text: error.message || "Failed to load admin dashboard." });
     } finally {
@@ -89,10 +110,10 @@ function AdminDashboard({ token, currentUser, apiRequest, onLogout }) {
     loadDashboard();
   }, [loadDashboard]);
 
-  const todayCount = useMemo(() => {
-    const today = new Date().toISOString().split("T")[0];
-    return appointments.filter((item) => item.appointmentDate?.startsWith(today)).length;
-  }, [appointments]);
+  const completionRate = useMemo(() => {
+    if (!reports.totals.allTime) return 0;
+    return Math.round((reports.statusBreakdown.completed / reports.totals.allTime) * 100);
+  }, [reports]);
 
   const handleCreateService = async () => {
     setSaving(true);
@@ -190,12 +211,80 @@ function AdminDashboard({ token, currentUser, apiRequest, onLogout }) {
           <div className="hero__card-header"><span className="pulse-dot" />Overview</div>
           <div className="admin-overview"><strong>{services.length}</strong><span>Services</span></div>
           <div className="admin-overview"><strong>{appointments.length}</strong><span>Total appointments</span></div>
-          <div className="admin-overview"><strong>{todayCount}</strong><span>Today</span></div>
+          <div className="admin-overview"><strong>{reports.totals.today}</strong><span>Today</span></div>
           <button type="button" className="primary-btn" onClick={onLogout}>Logout</button>
         </div>
       </section>
 
       {message.text ? <div className={`api-message api-message--banner ${message.type || "info"}`}>{message.type === "error" ? <AlertCircle size={14} /> : <Check size={14} />}<span>{message.text}</span></div> : null}
+
+      <section className="card">
+        <header className="card__header"><span className="card__icon card__icon--teal"><BarChart3 size={18} /></span><div><h2>Reports & Analytics</h2><p>Daily/monthly totals and service performance</p></div></header>
+        <div className="card__body admin-stack">
+          <div className="report-kpi-grid">
+            <div className="report-kpi"><span>Daily appointments</span><strong>{reports.totals.today}</strong></div>
+            <div className="report-kpi"><span>Monthly appointments</span><strong>{reports.totals.month}</strong></div>
+            <div className="report-kpi"><span>All-time appointments</span><strong>{reports.totals.allTime}</strong></div>
+            <div className="report-kpi"><span>Completion rate</span><strong>{completionRate}%</strong></div>
+          </div>
+
+          <div className="report-trends-grid">
+            <div className="report-panel">
+              <h3>Last 7 days</h3>
+              {!reports.dailyTrend.length ? <p>No daily data.</p> : (
+                <div className="report-list">
+                  {reports.dailyTrend.map((item) => (
+                    <div key={item.key} className="report-row">
+                      <span>{item.label}</span>
+                      <strong>{item.total}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="report-panel">
+              <h3>Last 6 months</h3>
+              {!reports.monthlyTrend.length ? <p>No monthly data.</p> : (
+                <div className="report-list">
+                  {reports.monthlyTrend.map((item) => (
+                    <div key={item.key} className="report-row">
+                      <span>{item.label}</span>
+                      <strong>{item.total}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="report-trends-grid">
+            <div className="report-panel">
+              <h3>Status breakdown</h3>
+              <div className="report-list">
+                {Object.entries(reports.statusBreakdown).map(([status, total]) => (
+                  <div key={status} className="report-row">
+                    <span className="capitalize">{status}</span>
+                    <strong>{total}</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="report-panel">
+              <h3>Service performance</h3>
+              {!reports.servicePerformance.length ? <p>No service performance yet.</p> : (
+                <div className="report-list">
+                  {reports.servicePerformance.map((item) => (
+                    <div key={item._id || item.serviceName} className="report-row">
+                      <span>{item.serviceName}</span>
+                      <strong>{item.total}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="admin-grid">
         <section className="card">

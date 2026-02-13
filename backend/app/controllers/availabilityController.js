@@ -1,4 +1,5 @@
 const Availability = require("../models/availability");
+const { TIME_24_REGEX, buildSlotsFromSettings } = require("../utils/scheduling");
 
 const DEFAULT_SETTINGS = {
   key: "default",
@@ -8,43 +9,6 @@ const DEFAULT_SETTINGS = {
   workingDays: [1, 2, 3, 4, 5, 6],
   breakStartTime: "13:00",
   breakEndTime: "14:00"
-};
-
-const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/u;
-
-const parseMinutes = (timeValue) => {
-  const [hours, minutes] = timeValue.split(":").map(Number);
-  return hours * 60 + minutes;
-};
-
-const to12Hour = (totalMinutes) => {
-  const hours24 = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  const period = hours24 >= 12 ? "PM" : "AM";
-  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
-  return `${hours12}:${String(minutes).padStart(2, "0")} ${period}`;
-};
-
-const buildSlots = (settings) => {
-  const start = parseMinutes(settings.startTime);
-  const end = parseMinutes(settings.endTime);
-  const breakStart = settings.breakStartTime ? parseMinutes(settings.breakStartTime) : null;
-  const breakEnd = settings.breakEndTime ? parseMinutes(settings.breakEndTime) : null;
-  const slots = [];
-
-  for (let cursor = start; cursor + settings.slotDurationMinutes <= end; cursor += settings.slotDurationMinutes) {
-    const slotEnd = cursor + settings.slotDurationMinutes;
-    const inBreak =
-      breakStart !== null &&
-      breakEnd !== null &&
-      !(slotEnd <= breakStart || cursor >= breakEnd);
-
-    if (!inBreak) {
-      slots.push(to12Hour(cursor));
-    }
-  }
-
-  return slots;
 };
 
 const ensureSettings = async () => {
@@ -60,7 +24,7 @@ const validateUpdatePayload = (payload) => {
 
   for (const field of fieldsToCheck) {
     const value = payload[field];
-    if (value !== undefined && value !== "" && !TIME_REGEX.test(value)) {
+    if (value !== undefined && value !== "" && !TIME_24_REGEX.test(value)) {
       return `${field} must be in HH:mm format.`;
     }
   }
@@ -95,7 +59,7 @@ const getPublicAvailability = async (req, res) => {
         workingDays: settings.workingDays,
         breakStartTime: settings.breakStartTime,
         breakEndTime: settings.breakEndTime,
-        slots: buildSlots(settings)
+        slots: buildSlotsFromSettings(settings)
       }
     });
   } catch (error) {
@@ -115,7 +79,7 @@ const getAdminAvailability = async (req, res) => {
         workingDays: settings.workingDays,
         breakStartTime: settings.breakStartTime,
         breakEndTime: settings.breakEndTime,
-        slots: buildSlots(settings)
+        slots: buildSlotsFromSettings(settings)
       }
     });
   } catch (error) {
@@ -158,7 +122,7 @@ const updateAvailability = async (req, res) => {
         workingDays: settings.workingDays,
         breakStartTime: settings.breakStartTime,
         breakEndTime: settings.breakEndTime,
-        slots: buildSlots(settings)
+        slots: buildSlotsFromSettings(settings)
       }
     });
   } catch (error) {

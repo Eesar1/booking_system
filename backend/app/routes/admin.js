@@ -13,6 +13,7 @@ const {
   getAppointments,
   updateAppointment
 } = require("../controllers/appointmentController");
+const { getReports } = require("../controllers/reportController");
 
 const router = express.Router();
 
@@ -29,5 +30,6 @@ router.patch("/availability", authenticate, requireRole("admin"), updateAvailabi
 
 router.get("/appointments", authenticate, requireRole("admin"), getAppointments);
 router.patch("/appointments/:id", authenticate, requireRole("admin"), updateAppointment);
+router.get("/reports", authenticate, requireRole("admin"), getReports);
 
 module.exports = router;

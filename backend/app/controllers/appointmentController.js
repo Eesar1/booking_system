@@ -2,6 +2,14 @@ const mongoose = require("mongoose");
 const Appointment = require("../models/appointment");
 const Service = require("../models/service");
 const User = require("../models/user");
+const Availability = require("../models/availability");
+const {
+  TIME_12_REGEX,
+  parse12ToMinutes,
+  parse24ToMinutes,
+  buildSlotsFromSettings,
+  getDateRange
+} = require("../utils/scheduling");
 
 const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(value);
 
@@ -12,6 +20,124 @@ const parseDate = (value) => {
 
 const canAccessAppointment = (appointment, user) =>
   user.role === "admin" || appointment.customer.toString() === user._id.toString();
+
+const DEFAULT_AVAILABILITY_SETTINGS = {
+  key: "default",
+  startTime: "09:00",
+  endTime: "17:00",
+  slotDurationMinutes: 60,
+  workingDays: [1, 2, 3, 4, 5, 6],
+  breakStartTime: "13:00",
+  breakEndTime: "14:00"
+};
+
+const ensureAvailabilitySettings = async () => {
+  let settings = await Availability.findOne({ key: "default" });
+  if (!settings) {
+    settings = await Availability.create(DEFAULT_AVAILABILITY_SETTINGS);
+  }
+  return settings;
+};
+
+const validateTimeRange = (startTime, endTime) => {
+  if (!TIME_12_REGEX.test(startTime) || !TIME_12_REGEX.test(endTime)) {
+    return {
+      valid: false,
+      message: "startTime and endTime must be in hh:mm AM/PM format."
+    };
+  }
+
+  const startMinutes = parse12ToMinutes(startTime);
+  const endMinutes = parse12ToMinutes(endTime);
+  if (startMinutes === null || endMinutes === null || startMinutes >= endMinutes) {
+    return {
+      valid: false,
+      message: "Invalid time range. endTime must be after startTime."
+    };
+  }
+
+  return { valid: true, startMinutes, endMinutes };
+};
+
+const validateSlotAgainstAvailability = async ({ appointmentDate, startTime, endTime }) => {
+  const settings = await ensureAvailabilitySettings();
+  const parsedTimeRange = validateTimeRange(startTime, endTime);
+  if (!parsedTimeRange.valid) {
+    return parsedTimeRange;
+  }
+
+  const { startMinutes, endMinutes } = parsedTimeRange;
+  const openMinutes = parse24ToMinutes(settings.startTime);
+  const closeMinutes = parse24ToMinutes(settings.endTime);
+  if (startMinutes < openMinutes || endMinutes > closeMinutes) {
+    return {
+      valid: false,
+      message: "Selected time is outside working hours."
+    };
+  }
+
+  if (settings.breakStartTime && settings.breakEndTime) {
+    const breakStart = parse24ToMinutes(settings.breakStartTime);
+    const breakEnd = parse24ToMinutes(settings.breakEndTime);
+    const overlapsBreak = !(endMinutes <= breakStart || startMinutes >= breakEnd);
+    if (overlapsBreak) {
+      return {
+        valid: false,
+        message: "Selected time overlaps business break hours."
+      };
+    }
+  }
+
+  const appointmentDay = new Date(appointmentDate).getDay();
+  if (!settings.workingDays.includes(appointmentDay)) {
+    return {
+      valid: false,
+      message: "Selected date is outside configured working days."
+    };
+  }
+
+  const validSlots = buildSlotsFromSettings(settings);
+  if (!validSlots.includes(startTime)) {
+    return {
+      valid: false,
+      message: "Selected startTime is not an available slot."
+    };
+  }
+
+  return {
+    valid: true,
+    startMinutes,
+    endMinutes
+  };
+};
+
+const findConflictingAppointment = async ({
+  appointmentDate,
+  startMinutes,
+  endMinutes,
+  excludeAppointmentId = null
+}) => {
+  const { start, end } = getDateRange(appointmentDate);
+  const query = {
+    appointmentDate: { $gte: start, $lt: end },
+    status: { $ne: "cancelled" }
+  };
+  if (excludeAppointmentId) {
+    query._id = { $ne: excludeAppointmentId };
+  }
+
+  const sameDayAppointments = await Appointment.find(query).select("startTime endTime");
+  const conflict = sameDayAppointments.find((item) => {
+    const existingStart = parse12ToMinutes(item.startTime);
+    const existingEnd = parse12ToMinutes(item.endTime);
+    if (existingStart === null || existingEnd === null) {
+      return false;
+    }
+    return startMinutes < existingEnd && endMinutes > existingStart;
+  });
+
+  return conflict || null;
+};
 
 const createAppointment = async (req, res) => {
   try {
@@ -65,6 +191,26 @@ const createAppointment = async (req, res) => {
         return res.status(404).json({ message: "Customer not found." });
       }
       customer = customerDoc._id;
+    }
+
+    const slotValidation = await validateSlotAgainstAvailability({
+      appointmentDate: parsedDate,
+      startTime,
+      endTime
+    });
+    if (!slotValidation.valid) {
+      return res.status(400).json({ message: slotValidation.message });
+    }
+
+    const conflict = await findConflictingAppointment({
+      appointmentDate: parsedDate,
+      startMinutes: slotValidation.startMinutes,
+      endMinutes: slotValidation.endMinutes
+    });
+    if (conflict) {
+      return res.status(409).json({
+        message: "Selected slot is already booked."
+      });
     }
 
     const appointment = await Appointment.create({
@@ -233,6 +379,35 @@ const updateAppointment = async (req, res) => {
         return res.status(400).json({ message: "Invalid appointment date." });
       }
       updates.appointmentDate = parsedDate;
+    }
+
+    const nextStatus = updates.status || appointment.status;
+    const nextDate = updates.appointmentDate || appointment.appointmentDate;
+    const nextStartTime = updates.startTime || appointment.startTime;
+    const nextEndTime = updates.endTime || appointment.endTime;
+    const shouldValidateSlot = nextStatus !== "cancelled";
+
+    if (shouldValidateSlot) {
+      const slotValidation = await validateSlotAgainstAvailability({
+        appointmentDate: nextDate,
+        startTime: nextStartTime,
+        endTime: nextEndTime
+      });
+      if (!slotValidation.valid) {
+        return res.status(400).json({ message: slotValidation.message });
+      }
+
+      const conflict = await findConflictingAppointment({
+        appointmentDate: nextDate,
+        startMinutes: slotValidation.startMinutes,
+        endMinutes: slotValidation.endMinutes,
+        excludeAppointmentId: appointment._id
+      });
+      if (conflict) {
+        return res.status(409).json({
+          message: "Selected slot is already booked."
+        });
+      }
     }
 
     const updated = await Appointment.findByIdAndUpdate(id, updates, {

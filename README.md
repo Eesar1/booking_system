@@ -1,42 +1,105 @@
-﻿# Local Business Appointment Booking System
+# Local Business Appointment Booking System
 
 ## Overview
-An appointment booking system for local businesses (clinics, salons, consultants). It replaces phone/WhatsApp bookings with real‑time slot availability and role‑based dashboards for customers and business owners.
+This project is a full-stack appointment booking system for local businesses (clinics, salons, consultants). It replaces manual phone/WhatsApp scheduling with role-based login, live slot visibility, and admin controls.
 
-## Problem Statement
-Local businesses manage appointments via phone/WhatsApp, causing double bookings, missed appointments, and poor customer experience.
+## Current Build Scope (Day 1 to Day 13)
+### Customer side
+- Signup/login
+- Service selection (loaded from backend)
+- Date/time selection from availability slots
+- Appointment booking with validation feedback
+- Appointment history display
+- Cancel appointment from history
 
-## Core Features (Finalized for Day 1)
-### Customer
-- Register / log in
-- Browse services
-- Book date & time slot (real‑time availability)
-- View booking history
+### Admin side
+- Separate `/admin` login page
+- Manage services (create/update/activate)
+- Manage business availability settings
+- Manage appointment statuses
+- Daily/monthly analytics and service performance
 
-### Business Owner (Admin)
-- Create/manage services
-- Define working hours & availability
-- Approve, reschedule, or cancel appointments
-- View daily/monthly reports
-
-### System Rules
-- Prevent double booking
-- Slot availability validation
-- Role‑based access control
+### Scheduling rules
+- Role-based access control (customer/admin)
+- Slot must be valid against configured availability
+- Outside-hours and break-time booking blocked
+- Double booking blocked for overlapping time ranges
 
 ## Tech Stack
 - Frontend: React.js
 - Backend: Node.js + Express.js
-- Database: MongoDB
-- Deployment: Render / Vercel
+- Database: MongoDB (Atlas or local)
 
-## Deliverables
-- Full working web app
-- Source code (GitHub)
-- Deployment link
-- Project presentation + demo
+## Project Structure
+```text
+backend/
+  app/
+    config/        # DB connection
+    controllers/   # API logic
+    middleware/    # auth + RBAC
+    models/        # Mongoose schemas
+    routes/        # Express routes
+    utils/         # scheduling helpers
+frontend/
+  src/
+    App.js              # customer app flow
+    AdminDashboard.js   # admin dashboard
+```
 
-## 14‑Day Plan (Given)
+## Environment Variables
+Create `backend/.env` from `backend/.env.example`.
+
+```env
+PORT=5000
+MONGO_URI=your_primary_mongodb_uri
+MONGO_URI_FALLBACK=your_fallback_non_srv_uri
+JWT_SECRET=your_long_random_secret
+```
+
+## Local Setup
+### 1) Backend
+```bash
+cd backend
+npm install
+npm run dev
+```
+Backend runs on `http://localhost:5000`.
+
+### 2) Frontend
+```bash
+cd frontend
+npm install
+npm start
+```
+Frontend runs on `http://localhost:3000`.
+
+## API Summary
+### Public/customer auth
+- `POST /api/auth/signup`
+- `POST /api/auth/login`
+
+### Admin auth
+- `POST /api/auth/admin/signup`
+- `POST /api/auth/admin/login`
+
+### Customer booking flow
+- `GET /api/services`
+- `GET /api/availability`
+- `POST /api/appointments` (auth)
+- `GET /api/appointments` (auth)
+- `PATCH /api/appointments/:id` (auth)
+
+### Admin management + reports
+- `GET /api/admin/services` (admin)
+- `POST /api/admin/services` (admin)
+- `PATCH /api/admin/services/:id` (admin)
+- `GET /api/admin/availability` (admin)
+- `PATCH /api/admin/availability` (admin)
+- `GET /api/admin/appointments` (admin)
+- `PATCH /api/admin/appointments/:id` (admin)
+- `GET /api/admin/reports` (admin)
+
+## 14-Day Plan
 1. Requirements, feature finalization, GitHub repo
 2. Dev environment (React + Node/Express)
 3. DB schema (users, services, appointments)
@@ -44,7 +107,7 @@ Local businesses manage appointments via phone/WhatsApp, causing double bookings
 5. Admin auth + RBAC
 6. Customer UI
 7. Appointment APIs
-8. Frontend/Backend integration
+8. Frontend/backend integration
 9. Admin dashboard
 10. Double booking prevention
 11. Customer appointment history
