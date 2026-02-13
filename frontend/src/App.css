@@ -1165,3 +1165,125 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.admin-overview {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.admin-overview strong {
+  font-size: 1.2rem;
+}
+
+.admin-overview span {
+  color: rgba(226, 232, 240, 0.8);
+  font-size: 0.85rem;
+}
+
+.admin-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.admin-form-grid input,
+.admin-form-grid select,
+.admin-form-grid label input {
+  width: 100%;
+  border: 1px solid #dbe2ea;
+  border-radius: 10px;
+  padding: 9px 10px;
+  font-size: 0.9rem;
+}
+
+.admin-form-grid label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: #475569;
+}
+
+.admin-row {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr 0.8fr 0.8fr 0.7fr;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.admin-row input,
+.admin-row select {
+  width: 100%;
+  border: 1px solid #dbe2ea;
+  border-radius: 10px;
+  padding: 8px 9px;
+}
+
+.admin-row--appointments {
+  grid-template-columns: 1.8fr 1fr 0.7fr;
+}
+
+.admin-row--appointments p {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
+.admin-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #334155;
+}
+
+.admin-days {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.admin-slot-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-slot-preview span {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  color: #334155;
+}
+
+@media (max-width: 960px) {
+  .admin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-row--appointments {
+    grid-template-columns: 1fr;
+  }
+}

@@ -22,11 +22,17 @@ import {
   XCircle
 } from "lucide-react";
 import "./App.css";
+import AdminDashboard from "./AdminDashboard";
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:5000/api";
+const API_BASE_CANDIDATES = [
+  process.env.REACT_APP_API_BASE_URL,
+  "http://localhost:5000/api",
+  "/api"
+].filter(Boolean);
+const API_BASE_STORAGE_KEY = "booking_api_base";
 const SESSION_TOKEN_KEY = "booking_token";
 const SESSION_USER_KEY = "booking_user";
-const TIME_SLOTS = ["09:00 AM", "10:00 AM", "11:00 AM", "12:00 PM", "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM"];
+const DEFAULT_TIME_SLOTS = ["09:00 AM", "10:00 AM", "11:00 AM", "12:00 PM", "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM"];
 
 const DETAILS_SCHEMA = Yup.object({
   fullName: Yup.string().required("Full name is required"),
@@ -93,26 +99,93 @@ const minutesToTime = (totalMinutes) => {
 
 const normalizeError = (error, fallback) => (error instanceof Error && error.message ? error.message : fallback);
 
-async function apiRequest(path, { method = "GET", token = "", body } = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: body ? JSON.stringify(body) : undefined
-  });
+const isNetworkError = (error) =>
+  error?.name === "AbortError" ||
+  error?.message === "Failed to fetch" ||
+  error?.message === "Network request failed";
 
-  let data = {};
-  try {
-    data = await response.json();
-  } catch {
-    data = {};
+const normalizeApiBase = (base) => {
+  if (!base || typeof base !== "string") return "";
+  const trimmed = base.trim().replace(/\/+$/u, "");
+  if (!trimmed) return "";
+  if (trimmed === "/api") return "/api";
+  if (trimmed.endsWith("/api")) return trimmed;
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return `${trimmed}/api`;
+  return trimmed;
+};
+
+const buildCandidates = () => {
+  const preferredRaw = localStorage.getItem(API_BASE_STORAGE_KEY);
+  const preferred = normalizeApiBase(preferredRaw);
+  if (preferredRaw && !preferred) localStorage.removeItem(API_BASE_STORAGE_KEY);
+
+  const merged = preferred
+    ? [preferred, ...API_BASE_CANDIDATES.map(normalizeApiBase)]
+    : API_BASE_CANDIDATES.map(normalizeApiBase);
+  return [...new Set(merged.filter(Boolean))];
+};
+
+async function apiRequest(path, { method = "GET", token = "", body } = {}) {
+  const candidates = buildCandidates();
+  let lastError = null;
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const baseUrl = candidates[index];
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      clearTimeout(timeoutId);
+
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        data = {};
+      }
+
+      if (!response.ok) {
+        const canFallbackOnHttp =
+          index < candidates.length - 1 &&
+          (response.status === 404 || response.status === 502 || response.status === 503) &&
+          (baseUrl === "/api" || baseUrl.includes("localhost"));
+        if (canFallbackOnHttp) {
+          continue;
+        }
+        throw new Error(data.message || `Request failed with status ${response.status}.`);
+      }
+
+      localStorage.setItem(API_BASE_STORAGE_KEY, baseUrl);
+      return data;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      lastError = error;
+
+      const shouldTryNext = isNetworkError(error) && index < candidates.length - 1;
+      if (shouldTryNext) continue;
+      break;
+    }
   }
 
-  if (!response.ok) throw new Error(data.message || "Request failed.");
-  return data;
+  if (isNetworkError(lastError)) {
+    throw new Error("Backend is unreachable. Start backend server and check API base URL.");
+  }
+
+  throw lastError || new Error("Request failed.");
 }
 
 function App() {
   const calendarDays = useMemo(() => generateCalendarDays(), []);
+  const [pathname, setPathname] = useState(() => window.location.pathname);
   const [token, setToken] = useState(() => localStorage.getItem(SESSION_TOKEN_KEY) || "");
   const [currentUser, setCurrentUser] = useState(() => parseStoredUser());
   const [authMode, setAuthMode] = useState("login");
@@ -123,6 +196,7 @@ function App() {
   const [selectedServiceId, setSelectedServiceId] = useState("");
   const [selectedDate, setSelectedDate] = useState(calendarDays[0]?.id || "");
   const [selectedTime, setSelectedTime] = useState("");
+  const [availabilitySlots, setAvailabilitySlots] = useState(DEFAULT_TIME_SLOTS);
   const [appointments, setAppointments] = useState([]);
   const [appointmentsLoading, setAppointmentsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -133,6 +207,14 @@ function App() {
 
   const availabilityRef = useRef(null);
   const highlightTimer = useRef(null);
+  const isAdminRoute = pathname.startsWith("/admin");
+
+  const navigate = useCallback((nextPath) => {
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+      setPathname(nextPath);
+    }
+  }, []);
 
   const formik = useFormik({
     initialValues: { fullName: "", email: "", phone: "", notes: "" },
@@ -171,10 +253,39 @@ function App() {
           email: prev.email || data.user?.email || "",
           phone: prev.phone || data.user?.phone || ""
         }));
-        setAuthMessage({ type: "success", text: authMode === "signup" ? "Account created." : "Logged in." });
+        setAuthMessage({
+          type: "success",
+          text: authMode === "signup" ? "Account created." : "Logged in."
+        });
         authFormik.resetForm({ values: { name: "", email: values.email, password: "", phone: "" } });
       } catch (error) {
         setAuthMessage({ type: "error", text: normalizeError(error, "Authentication failed.") });
+      } finally {
+        setSubmitting(false);
+      }
+    }
+  });
+
+  const adminAuthFormik = useFormik({
+    initialValues: { email: "", password: "" },
+    validationSchema: Yup.object({
+      email: Yup.string().email("Enter a valid email").required("Email is required"),
+      password: Yup.string().min(6, "At least 6 characters").required("Password is required")
+    }),
+    onSubmit: async (values, { setSubmitting }) => {
+      try {
+        setAuthMessage({ type: "", text: "" });
+        const data = await apiRequest("/auth/admin/login", {
+          method: "POST",
+          body: { email: values.email.trim(), password: values.password }
+        });
+        setToken(data.token);
+        setCurrentUser(data.user);
+        localStorage.setItem(SESSION_TOKEN_KEY, data.token);
+        localStorage.setItem(SESSION_USER_KEY, JSON.stringify(data.user));
+        setAuthMessage({ type: "success", text: "Admin logged in." });
+      } catch (error) {
+        setAuthMessage({ type: "error", text: normalizeError(error, "Admin login failed.") });
       } finally {
         setSubmitting(false);
       }
@@ -192,8 +303,16 @@ function App() {
       ...SERVICE_META[item.name]
     }));
     setServices(mapped);
-    if (mapped.length && !selectedServiceId) setSelectedServiceId(mapped[0].id);
+    if (mapped.length && !selectedServiceId) {
+      setSelectedServiceId(mapped[0].id);
+    }
   }, [selectedServiceId]);
+
+  const loadAvailability = useCallback(async () => {
+    const data = await apiRequest("/availability");
+    const slots = data?.availability?.slots || DEFAULT_TIME_SLOTS;
+    setAvailabilitySlots(slots.length ? slots : DEFAULT_TIME_SLOTS);
+  }, []);
 
   const loadAppointments = useCallback(async () => {
     if (!token) {
@@ -212,12 +331,19 @@ function App() {
   }, [token]);
 
   useEffect(() => {
+    if (isAdminRoute) return;
     loadServices().catch((error) => setMessage({ type: "error", text: normalizeError(error, "Failed to load services.") }));
-  }, [loadServices]);
+  }, [isAdminRoute, loadServices]);
 
   useEffect(() => {
+    if (isAdminRoute) return;
+    loadAvailability().catch((error) => setMessage({ type: "error", text: normalizeError(error, "Failed to load availability.") }));
+  }, [isAdminRoute, loadAvailability]);
+
+  useEffect(() => {
+    if (isAdminRoute) return;
     loadAppointments();
-  }, [loadAppointments]);
+  }, [isAdminRoute, loadAppointments]);
 
   useEffect(
     () => () => {
@@ -225,6 +351,18 @@ function App() {
     },
     []
   );
+
+  useEffect(() => {
+    const onPopState = () => setPathname(window.location.pathname);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    if (currentUser?.role === "admin" && !isAdminRoute) {
+      navigate("/admin");
+    }
+  }, [currentUser?.role, isAdminRoute, navigate]);
 
   const selectedService = useMemo(() => services.find((item) => item.id === selectedServiceId), [services, selectedServiceId]);
 
@@ -240,8 +378,8 @@ function App() {
   }, [appointments, selectedDate]);
 
   const slots = useMemo(
-    () => TIME_SLOTS.map((time) => ({ time, available: !bookedTimes.has(time) })),
-    [bookedTimes]
+    () => availabilitySlots.map((time) => ({ time, available: !bookedTimes.has(time) })),
+    [availabilitySlots, bookedTimes]
   );
 
   const firstAvailableTime = slots.find((slot) => slot.available)?.time || "--";
@@ -316,6 +454,78 @@ function App() {
     setAuthMessage({ type: "info", text: "Logged out." });
   };
 
+  if (isAdminRoute) {
+    return (
+      <div className="app">
+        <nav className="topbar">
+          <div className="topbar__inner">
+            <div className="brand"><span className="brand__icon"><CalendarCheck size={16} /></span><span className="brand__name">BookEasy</span></div>
+            <div className="auth-state">
+              <button className="auth-link" type="button" onClick={() => navigate("/")}>Customer Page</button>
+              {token ? <button className="auth-link" type="button" onClick={handleLogout}>Logout</button> : null}
+            </div>
+          </div>
+        </nav>
+
+        {currentUser?.role === "admin" && token ? (
+          <AdminDashboard
+            token={token}
+            currentUser={currentUser}
+            apiRequest={apiRequest}
+            onLogout={handleLogout}
+          />
+        ) : (
+          <main className="shell">
+            <section className="card">
+              <header className="card__header">
+                <span className="card__icon card__icon--teal"><Shield size={18} /></span>
+                <div><h2>Admin Login</h2><p>Sign in to open the admin dashboard</p></div>
+              </header>
+              <div className="card__body">
+                <form className="auth-form" onSubmit={adminAuthFormik.handleSubmit}>
+                  <label className="field">
+                    <span>Email <span className="field__required">*</span></span>
+                    <div className={`field__control ${adminAuthFormik.touched.email && adminAuthFormik.errors.email ? "error" : ""}`}>
+                      <Mail size={14} />
+                      <input
+                        type="email"
+                        name="email"
+                        value={adminAuthFormik.values.email}
+                        onChange={adminAuthFormik.handleChange}
+                        onBlur={adminAuthFormik.handleBlur}
+                        placeholder="admin@example.com"
+                      />
+                    </div>
+                    {adminAuthFormik.touched.email && adminAuthFormik.errors.email ? <span className="error-text">{adminAuthFormik.errors.email}</span> : null}
+                  </label>
+                  <label className="field">
+                    <span>Password <span className="field__required">*</span></span>
+                    <div className={`field__control ${adminAuthFormik.touched.password && adminAuthFormik.errors.password ? "error" : ""}`}>
+                      <Shield size={14} />
+                      <input
+                        type="password"
+                        name="password"
+                        value={adminAuthFormik.values.password}
+                        onChange={adminAuthFormik.handleChange}
+                        onBlur={adminAuthFormik.handleBlur}
+                        placeholder="********"
+                      />
+                    </div>
+                    {adminAuthFormik.touched.password && adminAuthFormik.errors.password ? <span className="error-text">{adminAuthFormik.errors.password}</span> : null}
+                  </label>
+                  <button className="primary-btn auth-submit" type="submit">
+                    {adminAuthFormik.isSubmitting ? "Please wait..." : "Sign in as admin"}
+                  </button>
+                </form>
+                {authMessage.text ? <div className={`api-message ${authMessage.type || "info"}`}>{authMessage.type === "error" ? <AlertCircle size={14} /> : <Check size={14} />}<span>{authMessage.text}</span></div> : null}
+              </div>
+            </section>
+          </main>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <nav className="topbar">
@@ -345,7 +555,7 @@ function App() {
         </section>
 
         <section className="card">
-          <header className="card__header"><span className="card__icon card__icon--teal"><User size={18} /></span><div><h2>Customer access</h2><p>Login or signup to create appointments</p></div></header>
+          <header className="card__header"><span className="card__icon card__icon--teal"><User size={18} /></span><div><h2>Customer Access</h2><p>Login or signup to create appointments</p></div></header>
           <div className="card__body">
             <div className="auth-panel">
               <div className="auth-tabs">
