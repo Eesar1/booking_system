@@ -47,6 +47,29 @@ const DEFAULT_REPORTS = {
   servicePerformance: []
 };
 
+const toNumber = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizeReports = (raw = {}) => ({
+  totals: {
+    today: toNumber(raw?.totals?.today),
+    month: toNumber(raw?.totals?.month),
+    allTime: toNumber(raw?.totals?.allTime)
+  },
+  statusBreakdown: {
+    pending: toNumber(raw?.statusBreakdown?.pending),
+    approved: toNumber(raw?.statusBreakdown?.approved),
+    rescheduled: toNumber(raw?.statusBreakdown?.rescheduled),
+    cancelled: toNumber(raw?.statusBreakdown?.cancelled),
+    completed: toNumber(raw?.statusBreakdown?.completed)
+  },
+  dailyTrend: Array.isArray(raw?.dailyTrend) ? raw.dailyTrend : [],
+  monthlyTrend: Array.isArray(raw?.monthlyTrend) ? raw.monthlyTrend : [],
+  servicePerformance: Array.isArray(raw?.servicePerformance) ? raw.servicePerformance : []
+});
+
 function AdminDashboard({ token, apiRequest, onLogout }) {
   const [services, setServices] = useState([]);
   const [appointments, setAppointments] = useState([]);
@@ -98,7 +121,7 @@ function AdminDashboard({ token, apiRequest, onLogout }) {
         )
       );
       setAvailability(availabilityData.availability || DEFAULT_AVAILABILITY);
-      setReports(reportsData.reports || DEFAULT_REPORTS);
+      setReports(normalizeReports(reportsData.reports));
     } catch (error) {
       setMessage({ type: "error", text: error.message || "Failed to load admin dashboard." });
     } finally {
@@ -276,7 +299,8 @@ function AdminDashboard({ token, apiRequest, onLogout }) {
                   {reports.servicePerformance.map((item) => (
                     <div key={item._id || item.serviceName} className="report-row">
                       <span>{item.serviceName}</span>
-                      <strong>{item.total}</strong>
+                      <strong>{toNumber(item.total)}</strong>
+                      <small>{`Done ${toNumber(item.completed)} | Cancelled ${toNumber(item.cancelled)}`}</small>
                     </div>
                   ))}
                 </div>

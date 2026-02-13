@@ -33,6 +33,8 @@ const API_BASE_STORAGE_KEY = "booking_api_base";
 const SESSION_TOKEN_KEY = "booking_token";
 const SESSION_USER_KEY = "booking_user";
 const DEFAULT_TIME_SLOTS = ["09:00 AM", "10:00 AM", "11:00 AM", "12:00 PM", "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM"];
+const DEFAULT_WORKING_DAYS = [1, 2, 3, 4, 5, 6];
+const WORKING_DAYS_ERROR_MESSAGE = "Selected date is outside configured working days.";
 
 const DETAILS_SCHEMA = Yup.object({
   fullName: Yup.string().required("Full name is required"),
@@ -57,13 +59,32 @@ const parseStoredUser = () => {
   }
 };
 
+const toDateKey = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateValue = (value) => {
+  if (!value) return null;
+  const text = String(value).trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/u);
+  if (match) {
+    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  }
+
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
 const generateCalendarDays = () => {
   const today = new Date();
   return Array.from({ length: 14 }, (_, index) => {
     const date = new Date(today);
     date.setDate(today.getDate() + index);
     return {
-      id: date.toISOString().split("T")[0],
+      id: toDateKey(date),
       date: date.getDate(),
       dayName: date.toLocaleDateString("en-US", { weekday: "short" }),
       month: date.toLocaleDateString("en-US", { month: "short" }),
@@ -72,10 +93,9 @@ const generateCalendarDays = () => {
   });
 };
 
-const formatDisplayDate = (iso) => {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
+const formatDisplayDate = (value) => {
+  const date = parseDateValue(value);
+  if (!date) return "";
   return date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 };
 
@@ -98,6 +118,10 @@ const minutesToTime = (totalMinutes) => {
 };
 
 const normalizeError = (error, fallback) => (error instanceof Error && error.message ? error.message : fallback);
+const isSlotConflictError = (text) =>
+  typeof text === "string" && text.toLowerCase().includes("selected slot is already booked");
+const isWorkingDaysError = (text) =>
+  typeof text === "string" && text.toLowerCase().includes("outside configured working days");
 
 const isNetworkError = (error) =>
   error?.name === "AbortError" ||
@@ -191,13 +215,16 @@ function App() {
   const [authMode, setAuthMode] = useState("login");
   const [authMessage, setAuthMessage] = useState({ type: "", text: "" });
   const [message, setMessage] = useState({ type: "", text: "" });
+  const [historyMessage, setHistoryMessage] = useState({ type: "", text: "" });
 
   const [services, setServices] = useState([]);
   const [selectedServiceId, setSelectedServiceId] = useState("");
   const [selectedDate, setSelectedDate] = useState(calendarDays[0]?.id || "");
   const [selectedTime, setSelectedTime] = useState("");
   const [availabilitySlots, setAvailabilitySlots] = useState(DEFAULT_TIME_SLOTS);
+  const [availabilityWorkingDays, setAvailabilityWorkingDays] = useState(DEFAULT_WORKING_DAYS);
   const [appointments, setAppointments] = useState([]);
+  const [conflictBlockedSlots, setConflictBlockedSlots] = useState({});
   const [appointmentsLoading, setAppointmentsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [checkingAvailability, setCheckingAvailability] = useState(false);
@@ -311,7 +338,11 @@ function App() {
   const loadAvailability = useCallback(async () => {
     const data = await apiRequest("/availability");
     const slots = data?.availability?.slots || DEFAULT_TIME_SLOTS;
+    const workingDays = Array.isArray(data?.availability?.workingDays)
+      ? data.availability.workingDays
+      : DEFAULT_WORKING_DAYS;
     setAvailabilitySlots(slots.length ? slots : DEFAULT_TIME_SLOTS);
+    setAvailabilityWorkingDays(workingDays);
   }, []);
 
   const loadAppointments = useCallback(async () => {
@@ -365,24 +396,41 @@ function App() {
   }, [currentUser?.role, isAdminRoute, navigate]);
 
   const selectedService = useMemo(() => services.find((item) => item.id === selectedServiceId), [services, selectedServiceId]);
+  const selectedDateObject = useMemo(() => parseDateValue(selectedDate), [selectedDate]);
+  const selectedDayIndex = selectedDateObject ? selectedDateObject.getDay() : null;
+  const selectedDayIsWorking = selectedDayIndex !== null && availabilityWorkingDays.includes(selectedDayIndex);
 
   const bookedTimes = useMemo(() => {
     const key = selectedDate;
     const set = new Set();
     appointments.forEach((appointment) => {
       if (!appointment.appointmentDate || appointment.status === "cancelled") return;
-      const dayKey = new Date(appointment.appointmentDate).toISOString().split("T")[0];
+      const day = parseDateValue(appointment.appointmentDate);
+      if (!day) return;
+      const dayKey = toDateKey(day);
       if (dayKey === key) set.add(appointment.startTime);
     });
     return set;
   }, [appointments, selectedDate]);
 
+  const blockedTimes = useMemo(() => {
+    const merged = new Set(bookedTimes);
+    const locallyBlocked = conflictBlockedSlots[selectedDate] || [];
+    locallyBlocked.forEach((time) => merged.add(time));
+    return merged;
+  }, [bookedTimes, conflictBlockedSlots, selectedDate]);
+
   const slots = useMemo(
-    () => availabilitySlots.map((time) => ({ time, available: !bookedTimes.has(time) })),
-    [availabilitySlots, bookedTimes]
+    () =>
+      availabilitySlots.map((time) => ({
+        time,
+        available: selectedDayIsWorking && !blockedTimes.has(time)
+      })),
+    [availabilitySlots, blockedTimes, selectedDayIsWorking]
   );
 
   const firstAvailableTime = slots.find((slot) => slot.available)?.time || "--";
+  const selectedTimeAvailable = Boolean(selectedTime && !blockedTimes.has(selectedTime));
   const detailsValid = useMemo(() => {
     try {
       DETAILS_SCHEMA.validateSync(formik.values, { abortEarly: false });
@@ -392,7 +440,21 @@ function App() {
     }
   }, [formik.values]);
 
-  const canConfirm = Boolean(token && selectedService && selectedDate && selectedTime && detailsValid && !submitting);
+  const canConfirm = Boolean(
+    token &&
+    selectedService &&
+    selectedDate &&
+    selectedDayIsWorking &&
+    selectedTimeAvailable &&
+    detailsValid &&
+    !submitting
+  );
+
+  useEffect(() => {
+    if (!selectedDateObject || selectedDayIsWorking) return;
+    setSelectedTime("");
+    setHistoryMessage({ type: "error", text: WORKING_DAYS_ERROR_MESSAGE });
+  }, [selectedDateObject, selectedDayIsWorking]);
 
   const handleAvailabilityRefresh = async () => {
     availabilityRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -408,6 +470,7 @@ function App() {
     setCheckingAvailability(true);
     await loadAppointments();
     setCheckingAvailability(false);
+    setHistoryMessage({ type: "", text: "" });
     setMessage({ type: "success", text: "Availability refreshed from backend." });
   };
 
@@ -427,9 +490,35 @@ function App() {
       setLastCreatedAppointment(data.appointment || null);
       setShowModal(true);
       await loadAppointments();
+      setHistoryMessage({ type: "", text: "" });
       setMessage({ type: "success", text: "Appointment created successfully." });
     } catch (error) {
-      setMessage({ type: "error", text: normalizeError(error, "Failed to create appointment.") });
+      const errorText = normalizeError(error, "Failed to create appointment.");
+      if (isSlotConflictError(errorText)) {
+        setMessage({ type: "", text: "" });
+        setHistoryMessage({
+          type: "error",
+          text: "Selected slot is already booked. Choose another slot."
+        });
+        setConflictBlockedSlots((prev) => {
+          const existing = prev[selectedDate] || [];
+          if (existing.includes(selectedTime)) {
+            return prev;
+          }
+          return {
+            ...prev,
+            [selectedDate]: [...existing, selectedTime]
+          };
+        });
+        setSelectedTime("");
+        await loadAppointments();
+      } else if (isWorkingDaysError(errorText)) {
+        setMessage({ type: "", text: "" });
+        setSelectedTime("");
+        setHistoryMessage({ type: "error", text: WORKING_DAYS_ERROR_MESSAGE });
+      } else {
+        setMessage({ type: "error", text: errorText });
+      }
     } finally {
       setSubmitting(false);
     }
@@ -449,6 +538,7 @@ function App() {
     setToken("");
     setCurrentUser(null);
     setAppointments([]);
+    setConflictBlockedSlots({});
     localStorage.removeItem(SESSION_TOKEN_KEY);
     localStorage.removeItem(SESSION_USER_KEY);
     setAuthMessage({ type: "info", text: "Logged out." });
@@ -601,9 +691,9 @@ function App() {
             <section ref={availabilityRef} className={`card ${highlightAvailability ? "highlight" : ""}`}>
               <header className="card__header"><span className="card__icon card__icon--violet"><CalendarDays size={18} /></span><div><h2>Choose date and time</h2><p>Booked slots are disabled</p></div></header>
               <div className="card__body">
-                <div className="date-strip scrollbar-hide">{calendarDays.map((day) => <button key={day.id} type="button" onClick={() => { setSelectedDate(day.id); setSelectedTime(""); }} className={`date-card ${selectedDate === day.id ? "selected" : ""}`}><span>{day.dayName}</span><strong>{day.date}</strong><small>{day.month}</small>{day.isToday ? <em>Today</em> : null}</button>)}</div>
+                <div className="date-strip scrollbar-hide">{calendarDays.map((day) => <button key={day.id} type="button" onClick={() => { setSelectedDate(day.id); setSelectedTime(""); setHistoryMessage({ type: "", text: "" }); }} className={`date-card ${selectedDate === day.id ? "selected" : ""}`}><span>{day.dayName}</span><strong>{day.date}</strong><small>{day.month}</small>{day.isToday ? <em>Today</em> : null}</button>)}</div>
                 <div className="divider" />
-                <div className="time-grid">{slots.map((slot) => <button key={slot.time} type="button" disabled={!slot.available} className={`time-slot ${slot.available ? "" : "disabled"} ${selectedTime === slot.time ? "selected" : ""}`} onClick={() => slot.available && setSelectedTime(slot.time)}><Clock size={14} />{slot.time}{!slot.available ? <span className="slot-x">x</span> : null}</button>)}</div>
+                <div className="time-grid">{slots.map((slot) => <button key={slot.time} type="button" disabled={!slot.available} className={`time-slot ${slot.available ? "" : "disabled"} ${selectedTime === slot.time ? "selected" : ""}`} onClick={() => { if (slot.available) { setSelectedTime(slot.time); setHistoryMessage({ type: "", text: "" }); } }}><Clock size={14} />{slot.time}{!slot.available ? <span className="slot-x">x</span> : null}</button>)}</div>
               </div>
             </section>
 
@@ -637,6 +727,7 @@ function App() {
 
             <div className="history-card">
               <div className="history-card__header"><CalendarDays size={16} />Appointment history</div>
+              {historyMessage.text ? <div className={`api-message history-message ${historyMessage.type || "info"}`}>{historyMessage.type === "error" ? <AlertCircle size={14} /> : <Check size={14} />}<span>{historyMessage.text}</span></div> : null}
               {appointmentsLoading ? <p>Loading history...</p> : null}
               {!appointmentsLoading && !appointments.length ? <p>No appointments yet.</p> : null}
               {!appointmentsLoading && appointments.length ? <div className="history-list">{appointments.slice(0, 5).map((item) => <div key={item._id} className="history-item"><div><strong>{item.service?.name || "Service"}</strong><span>{formatDisplayDate(item.appointmentDate)} at {item.startTime}</span><em className={`status status--${item.status}`}>{item.status}</em></div>{item.status !== "cancelled" ? <button className="history-cancel" type="button" onClick={() => handleCancel(item._id)}><XCircle size={14} />Cancel</button> : null}</div>)}</div> : null}

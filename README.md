@@ -1,9 +1,9 @@
-# Local Business Appointment Booking System
+﻿# Local Business Appointment Booking System
 
 ## Overview
 This project is a full-stack appointment booking system for local businesses (clinics, salons, consultants). It replaces manual phone/WhatsApp scheduling with role-based login, live slot visibility, and admin controls.
 
-## Current Build Scope (Day 1 to Day 13)
+## Current Build Scope (Day 1 to Day 14)
 ### Customer side
 - Signup/login
 - Service selection (loaded from backend)
@@ -98,6 +98,27 @@ Frontend runs on `http://localhost:3000`.
 - `GET /api/admin/appointments` (admin)
 - `PATCH /api/admin/appointments/:id` (admin)
 - `GET /api/admin/reports` (admin)
+
+## Reports & Analytics (How It Works)
+### Backend flow
+- Route protection: `backend/app/routes/admin.js` exposes `GET /api/admin/reports` behind `authenticate` + `requireRole("admin")`.
+- Controller: `backend/app/controllers/reportController.js` builds the reports payload.
+- Data source: `Appointment` collection with MongoDB aggregation pipelines.
+
+### Report settings used in code
+- Daily totals: current day window (`startOfToday` to `startOfTomorrow`).
+- Monthly totals: current calendar month (`startOfMonth` to `startOfNextMonth`).
+- Daily trend: last 7 days (including today).
+- Monthly trend: last 6 months (including current month).
+- Status breakdown: `pending`, `approved`, `rescheduled`, `cancelled`, `completed`.
+- Service performance: grouped by service with `total`, `completed`, `cancelled`.
+
+### Frontend flow
+- Admin dashboard requests reports in `frontend/src/AdminDashboard.js` via `apiRequest("/admin/reports")`.
+- KPI cards render totals and completion rate.
+- Trend panels render daily/monthly arrays.
+- Status panel renders status breakdown.
+- Service panel renders service performance entries.
 
 ## 14-Day Plan
 1. Requirements, feature finalization, GitHub repo

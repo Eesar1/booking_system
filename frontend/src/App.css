@@ -972,6 +972,10 @@
   color: #0f172a;
 }
 
+.history-message {
+  width: 100%;
+}
+
 .history-list {
   display: grid;
   gap: 10px;
@@ -1244,13 +1248,20 @@
 }
 
 .report-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto;
   align-items: center;
-  justify-content: space-between;
+  gap: 4px 8px;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   padding: 8px 10px;
   font-size: 0.86rem;
+}
+
+.report-row small {
+  grid-column: 1 / -1;
+  color: #64748b;
+  font-size: 0.75rem;
 }
 
 .capitalize {
