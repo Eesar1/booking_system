@@ -23,7 +23,7 @@ This project is a full-stack appointment booking system for local businesses (cl
 - Role-based access control (customer/admin)
 - Slot must be valid against configured availability
 - Outside-hours and break-time booking blocked
-- Double booking blocked for overlapping time ranges
+- Double booking blocked per service/consultant resource for overlapping time ranges
 
 ## Tech Stack
 - Frontend: React.js

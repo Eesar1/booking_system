@@ -122,6 +122,12 @@ const isSlotConflictError = (text) =>
   typeof text === "string" && text.toLowerCase().includes("selected slot is already booked");
 const isWorkingDaysError = (text) =>
   typeof text === "string" && text.toLowerCase().includes("outside configured working days");
+const getAppointmentServiceId = (serviceValue) => {
+  if (!serviceValue) return "";
+  if (typeof serviceValue === "string") return serviceValue;
+  return serviceValue._id || serviceValue.id || "";
+};
+const buildServiceDateKey = (dateKey, serviceId) => `${dateKey}::${serviceId || "none"}`;
 
 const isNetworkError = (error) =>
   error?.name === "AbortError" ||
@@ -399,26 +405,33 @@ function App() {
   const selectedDateObject = useMemo(() => parseDateValue(selectedDate), [selectedDate]);
   const selectedDayIndex = selectedDateObject ? selectedDateObject.getDay() : null;
   const selectedDayIsWorking = selectedDayIndex !== null && availabilityWorkingDays.includes(selectedDayIndex);
+  const selectedServiceDateKey = useMemo(
+    () => buildServiceDateKey(selectedDate, selectedServiceId),
+    [selectedDate, selectedServiceId]
+  );
 
   const bookedTimes = useMemo(() => {
+    if (!selectedServiceId) return new Set();
     const key = selectedDate;
     const set = new Set();
     appointments.forEach((appointment) => {
       if (!appointment.appointmentDate || appointment.status === "cancelled") return;
+      const appointmentServiceId = getAppointmentServiceId(appointment.service);
+      if (appointmentServiceId !== selectedServiceId) return;
       const day = parseDateValue(appointment.appointmentDate);
       if (!day) return;
       const dayKey = toDateKey(day);
       if (dayKey === key) set.add(appointment.startTime);
     });
     return set;
-  }, [appointments, selectedDate]);
+  }, [appointments, selectedDate, selectedServiceId]);
 
   const blockedTimes = useMemo(() => {
     const merged = new Set(bookedTimes);
-    const locallyBlocked = conflictBlockedSlots[selectedDate] || [];
+    const locallyBlocked = conflictBlockedSlots[selectedServiceDateKey] || [];
     locallyBlocked.forEach((time) => merged.add(time));
     return merged;
-  }, [bookedTimes, conflictBlockedSlots, selectedDate]);
+  }, [bookedTimes, conflictBlockedSlots, selectedServiceDateKey]);
 
   const slots = useMemo(
     () =>
@@ -455,6 +468,12 @@ function App() {
     setSelectedTime("");
     setHistoryMessage({ type: "error", text: WORKING_DAYS_ERROR_MESSAGE });
   }, [selectedDateObject, selectedDayIsWorking]);
+
+  useEffect(() => {
+    if (selectedTime && blockedTimes.has(selectedTime)) {
+      setSelectedTime("");
+    }
+  }, [selectedTime, blockedTimes]);
 
   const handleAvailabilityRefresh = async () => {
     availabilityRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -501,13 +520,13 @@ function App() {
           text: "Selected slot is already booked. Choose another slot."
         });
         setConflictBlockedSlots((prev) => {
-          const existing = prev[selectedDate] || [];
+          const existing = prev[selectedServiceDateKey] || [];
           if (existing.includes(selectedTime)) {
             return prev;
           }
           return {
             ...prev,
-            [selectedDate]: [...existing, selectedTime]
+            [selectedServiceDateKey]: [...existing, selectedTime]
           };
         });
         setSelectedTime("");

@@ -113,6 +113,7 @@ const validateSlotAgainstAvailability = async ({ appointmentDate, startTime, end
 
 const findConflictingAppointment = async ({
   appointmentDate,
+  service,
   startMinutes,
   endMinutes,
   excludeAppointmentId = null
@@ -120,6 +121,7 @@ const findConflictingAppointment = async ({
   const { start, end } = getDateRange(appointmentDate);
   const query = {
     appointmentDate: { $gte: start, $lt: end },
+    service,
     status: { $ne: "cancelled" }
   };
   if (excludeAppointmentId) {
@@ -204,6 +206,7 @@ const createAppointment = async (req, res) => {
 
     const conflict = await findConflictingAppointment({
       appointmentDate: parsedDate,
+      service: serviceDoc._id,
       startMinutes: slotValidation.startMinutes,
       endMinutes: slotValidation.endMinutes
     });
@@ -383,6 +386,7 @@ const updateAppointment = async (req, res) => {
 
     const nextStatus = updates.status || appointment.status;
     const nextDate = updates.appointmentDate || appointment.appointmentDate;
+    const nextService = updates.service || appointment.service;
     const nextStartTime = updates.startTime || appointment.startTime;
     const nextEndTime = updates.endTime || appointment.endTime;
     const shouldValidateSlot = nextStatus !== "cancelled";
@@ -399,6 +403,7 @@ const updateAppointment = async (req, res) => {
 
       const conflict = await findConflictingAppointment({
         appointmentDate: nextDate,
+        service: nextService,
         startMinutes: slotValidation.startMinutes,
         endMinutes: slotValidation.endMinutes,
         excludeAppointmentId: appointment._id
