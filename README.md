@@ -135,3 +135,7 @@ Frontend runs on `http://localhost:3000`.
 12. Admin reports
 13. Cleanup + docs + push
 14. Testing + demo + presentation
+
+## Full Report
+- Complete project report and technical documentation:
+  - `docs/PROJECT_REPORT_AND_DOCUMENTATION.md`
